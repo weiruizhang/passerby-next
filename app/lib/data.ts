@@ -6,6 +6,8 @@ import {
   InvoicesTable,
   LatestInvoiceRaw,
   Revenue,
+  ApiEndpoint,
+  ParsedEndpoint,
 } from './definitions';
 import { formatCurrency } from './utils';
 
@@ -214,5 +216,72 @@ export async function fetchFilteredCustomers(query: string) {
   } catch (err) {
     console.error('Database Error:', err);
     throw new Error('Failed to fetch customer table.');
+  }
+}
+
+// ==================== API Document Crawler ====================
+
+export async function createApiEndpointsTableIfNotExists() {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS api_endpoints (
+        id SERIAL PRIMARY KEY,
+        source_url TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        summary TEXT,
+        parameters JSONB DEFAULT '[]'::jsonb,
+        request_body JSONB,
+        responses JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_api_endpoints_path ON api_endpoints(path)`;
+  } catch (error) {
+    console.error('Database Error:', error);
+    throw new Error('Failed to create api_endpoints table.');
+  }
+}
+
+export async function fetchApiEndpoints(): Promise<ApiEndpoint[]> {
+  try {
+    await createApiEndpointsTableIfNotExists();
+    const data = await sql<ApiEndpoint[]>`
+      SELECT * FROM api_endpoints ORDER BY created_at DESC
+    `;
+    return data;
+  } catch (error) {
+    console.error('Database Error:', error);
+    throw new Error('Failed to fetch api endpoints.');
+  }
+}
+
+export async function insertApiEndpoints(
+  endpoints: ParsedEndpoint[],
+  sourceUrl: string
+): Promise<number> {
+  try {
+    await createApiEndpointsTableIfNotExists();
+
+    let count = 0;
+    for (const endpoint of endpoints) {
+      await sql`
+        INSERT INTO api_endpoints (source_url, method, path, summary, parameters, request_body, responses)
+        VALUES (
+          ${sourceUrl},
+          ${endpoint.method},
+          ${endpoint.path},
+          ${endpoint.summary},
+          ${JSON.stringify(endpoint.parameters)}::jsonb,
+          ${endpoint.request_body ? JSON.stringify(endpoint.request_body) : null}::jsonb,
+          ${JSON.stringify(endpoint.responses)}::jsonb
+        )
+      `;
+      count++;
+    }
+    return count;
+  } catch (error) {
+    console.error('Database Error:', error);
+    throw new Error('Failed to insert api endpoints.');
   }
 }

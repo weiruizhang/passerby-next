@@ -86,3 +86,25 @@ export type InvoiceForm = {
   amount: number;
   status: 'pending' | 'paid';
 };
+
+// API Endpoint types for document crawler
+export type ApiEndpoint = {
+  id: number;
+  source_url: string;
+  method: string;
+  path: string;
+  summary: string | null;
+  parameters: unknown;
+  request_body: unknown;
+  responses: unknown;
+  created_at: Date;
+};
+
+export type ParsedEndpoint = {
+  method: string;
+  path: string;
+  summary: string | null;
+  parameters: unknown[];
+  request_body: unknown;
+  responses: Record<string, unknown>;
+};

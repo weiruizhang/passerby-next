@@ -1,11 +1,13 @@
 'use server';
- 
+
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import postgres from 'postgres';
 import { signIn } from '@/auth';
 import { AuthError } from 'next-auth';
+import { ParsedEndpoint } from './definitions';
+import { insertApiEndpoints } from './data';
 
 export async function authenticate(
   prevState: string | undefined,
@@ -125,4 +127,82 @@ export async function deleteInvoice(id: string) {
 
   await sql`DELETE FROM invoices WHERE id = ${id}`;
   revalidatePath('/dashboard/invoices');
+}
+
+// ==================== API Document Crawler ====================
+
+const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head'] as const;
+
+export async function crawlOpenApi(
+  url: string
+): Promise<{ endpoints: ParsedEndpoint[]; error?: string }> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return { endpoints: [], error: `HTTP ${response.status}: ${response.statusText}` };
+    }
+
+    const openApiDoc = await response.json();
+
+    if (!openApiDoc.paths || typeof openApiDoc.paths !== 'object') {
+      return { endpoints: [], error: 'Invalid OpenAPI document: missing or invalid "paths" field' };
+    }
+
+    const endpoints: ParsedEndpoint[] = [];
+
+    for (const [path, pathItem] of Object.entries(openApiDoc.paths as Record<string, Record<string, unknown>>)) {
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (!HTTP_METHODS.includes(method as typeof HTTP_METHODS[number])) continue;
+
+        const op = operation as {
+          summary?: string;
+          description?: string;
+          parameters?: unknown[];
+          requestBody?: unknown;
+          responses?: Record<string, unknown>;
+        };
+
+        endpoints.push({
+          method: method.toUpperCase(),
+          path,
+          summary: op.summary || op.description || null,
+          parameters: op.parameters || [],
+          request_body: op.requestBody || null,
+          responses: op.responses || {},
+        });
+      }
+    }
+
+    return { endpoints };
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.name === 'AbortError') {
+        return { endpoints: [], error: 'Request timeout (30s)' };
+      }
+      return { endpoints: [], error: err.message };
+    }
+    return { endpoints: [], error: 'Unknown error occurred' };
+  }
+}
+
+export async function saveApiEndpoints(
+  endpoints: ParsedEndpoint[],
+  sourceUrl: string
+): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    const count = await insertApiEndpoints(endpoints, sourceUrl);
+    revalidatePath('/dashboard/crawler');
+    return { success: true, count };
+  } catch (err) {
+    console.error(err);
+    return { success: false, count: 0, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
 }
